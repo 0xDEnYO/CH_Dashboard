@@ -1,0 +1,482 @@
+Option Explicit
+
+Dim test As String
+Dim wbInput As Workbook
+Dim wbMacro As Workbook
+Dim wbOutput As Workbook
+Dim wsInput As Worksheet
+Dim wsInputEnh As Worksheet
+Dim wsStart As Worksheet
+Dim wsOutput As Worksheet
+Dim rowcount As Long
+Dim investment As Long
+Dim coinCount As Long
+Dim investPerCoin As Double
+Dim copiedStuff As Range
+
+
+
+
+Sub ActionMacro()
+
+' clean
+
+
+'---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+'---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+'---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+    ' Remove inputEnhanced and output sheets from last run
+    Cleanup
+    
+    ' Save Macro workbook and worksheet in variable
+    Set wbMacro = ActiveWorkbook
+    Set wsStart = wbMacro.Sheets("START")
+    Set wsInput = wbMacro.Sheets("Input")
+
+    'Update input data
+    UpdateInputData
+    
+    'Re-Format input data
+    FormatInput
+
+    '----------------------------
+    ' Add Pivot Tables
+
+    wbMacro.Sheets.Add After:=wsInputEnh
+    
+    ActiveSheet.name = "Output"
+    Set wsOutput = ActiveSheet
+    
+    Dim PT1 As PivotTable
+    Dim PT2 As PivotTable
+    
+    
+    ' Add pivot table 1
+    Set PT1 = Nothing
+    Set PT1 = AddPivot(wsOutput, (1), (1), (getLastFilledRow(wsInputEnh)))
+    
+    ' Get and format Pivot Table object
+    On Error GoTo 0
+    If PT1 Is Nothing Then '<-- Pivot Table does't exist (Pivot Table renamed ?)
+        MsgBox "Pivot-Table object Error!"
+    Else ' Pivot-Table object exists
+        ' Configure pivot table 1
+        UpdatePivot1 PT1, (1)
+    End If
+    
+    ' Format with dollar currency format
+    Columns("B:C").Select
+    Selection.NumberFormat = _
+        "_-[$$-en-US]* #,##0.00_ ;_-[$$-en-US]* -#,##0.00 ;_-[$$-en-US]* ""-""??_ ;_-@_ "
+    
+    ' Ask user for investment amount for this hopper
+    'investment = InputBox("Enter the investment amount for this hopper ", "Enter a Number")
+    investment = wsStart.Cells(19, 3).Value
+    
+    ' Ask user for number of coins for this hopper
+    'coinCount = InputBox("Enter the number of coin pairs that this hopper is trading with", "Enter a Number")
+    coinCount = wsStart.Cells(20, 3).Value
+    
+    ' Calculate invest per coin (assuming even split)
+    investPerCoin = investment / coinCount
+    
+    ' Add calculated fields to pivot table
+    ' Sum of investment
+    ' Dim tmpStr As String
+    ' tmpStr = "= " & CInt(investPerCoin)
+    
+    PT1.CalculatedFields.Add "Investment", investment, True
+    
+    With PT1.PivotFields("Investment")
+        .Orientation = xlDataField
+        .Function = xlAverage
+        .Caption = "Cash Reserve"
+    End With
+    
+    ' Profit per Day
+    PT1.CalculatedFields.Add "Profit pd", "=Profit / Investment", True
+    With PT1.PivotFields("Profit pd")
+        .Orientation = xlDataField
+        .Function = xlAverage
+        .Caption = "Profit q.d."
+    End With
+    
+    ' Profit per annum
+    PT1.CalculatedFields.Add "Profit pa", "='Profit pd' *365", True
+        With PT1.PivotFields("Profit pa")
+        .Orientation = xlDataField
+        .Function = xlAverage
+        .Caption = "Profit p.a."
+    End With
+    
+    ' Format profit columns to percent
+    Range("E2:F" & rowcount).Select
+    Selection.Style = "Percent"
+    Selection.NumberFormat = "0.00%"
+    
+    'Adjust column widts
+    Columns("A:A").ColumnWidth = 14
+    Columns("D:D").ColumnWidth = 14
+    Columns("E:E").ColumnWidth = 12
+    Columns("F:F").ColumnWidth = 12
+    
+    ' Collapse pivot table
+    PT1.PivotFields("Day").ShowDetail = False
+    
+    'Hide controls to expand pivot table
+    PT1.ShowDrillIndicators = False
+
+    ' Hide wrong Grand Totals
+'    rowcount = PT1.TableRange2.Rows(PT1.TableRange2.Rows.Count).Row
+'    Range("D" & rowcount & ":F" & rowcount).Select
+'    With Selection.Font
+'        .ThemeColor = xlThemeColorAccent1
+'        .TintAndShade = 0.799981688894314
+'    End With
+    
+    ' Add note for user that row data is inaccurate (wrong investment amount)
+    Cells(rowcount + 3, 1).Value = "Note: the investment amount in left table is only correct for subtotals. Dont expand the table"
+        
+
+
+    ' Copy Pivot Table
+    Set PT2 = PT1
+    PT1.TableRange2.Copy wsOutput.Range("H1") 'copy to another area within same sheet
+    Set PT2 = wsOutput.PivotTables(1)
+    
+    ' Copy Column Widths
+    Columns("A:F").Select
+    Selection.Copy
+    Columns("H:M").Select
+    Selection.PasteSpecial Paste:=xlPasteColumnWidths, Operation:=xlNone, _
+        SkipBlanks:=False, Transpose:=False
+    
+    ' Swap row fields PT2
+    With PT2.PivotFields("Pair")
+        .Orientation = xlRowField
+        .Position = 1
+    End With
+
+    ' Add note for user that row data is inaccurate (wrong investment amount)
+    rowcount = PT2.TableRange2.Rows(PT2.TableRange2.Rows.Count).Row
+    Cells(rowcount + 3, 8).Value = "Note: the calculated profits are NOT correct for subtotals"
+       
+    test = "=" & investPerCoin
+    ' Update calculated field in right pivot table
+    'PT2.CalculatedFields("Investment").StandardFormula = test
+    
+    ' Expand pivot table
+    'PT2.PivotFields("Pair").ShowDetail = True
+    
+    'Activate controls to expand pivot table 2
+    PT2.ShowDrillIndicators = True
+    
+    ' Deactivate Subtotals
+    ' WORK IN PROGRESS
+    'With PT2.PivotFields("Profit pd")
+        'Set subtotal calculation to nothing
+        '.Subtotals = Array(False, False, False, False, False, False, False, False, False, False, False, False)
+        '.Subtotals(1) = False
+    'End With
+    
+    
+    'Adjust column widts
+    Columns("H:H").ColumnWidth = 16
+    
+    'Adjust zoom level
+    wsOutput.Select
+    ActiveWindow.Zoom = 80
+    
+    
+    
+End Sub
+
+
+
+Sub UpdateInputData()
+
+    Dim filepath As String
+
+    If wsStart.Cells(8, 3).Value = "YES" Then
+        'Fixed Path will be used to update input data
+        filepath = wsStart.Cells(9, 3).Value
+    Else
+        'Ask user to select file that contains input data
+         filepath = FileOpenDialogBox
+    End If
+    
+    ' Open input file
+    OpenExcelAndCopyContent (filepath)
+    
+    ' Clear Contents
+    wsInput.Cells.Clear
+    
+    ' Paste copied data into macro worksheet (to start macro with fresh data from there)
+    copiedStuff.Copy Destination:=wsInput.Range("A:A")
+    
+    ' Close input file
+    wbInput.Close
+    
+
+End Sub
+
+Sub OpenExcelAndCopyContent(filepath As String)
+
+
+'Open Excel
+Set wbInput = Workbooks.Open(filepath)
+
+'Update rowcount
+rowcount = getLastFilledRow(wbInput.Sheets(1))
+
+' Copy all rows with entries in the first column
+Set copiedStuff = wbInput.Sheets(1).Range("A1:A" & rowcount)
+
+End Sub
+
+
+Public Function FileOpenDialogBox() As String
+Dim fullpath As String
+'Display a Dialog Box that allows to select a single file.
+'The path for the file picked will be stored in fullpath variable
+  With Application.FileDialog(msoFileDialogFilePicker)
+        'Makes sure the user can select only one file
+        .AllowMultiSelect = False
+        'Filter to just the following types of files to narrow down selection options
+        .Filters.Add "Comma delimited", "*.csv", 1
+        'Show the dialog box
+        .Show
+        
+        'Store in fullpath variable
+        fullpath = .SelectedItems.Item(1)
+    End With
+    FileOpenDialogBox = fullpath
+
+End Function
+
+Sub Cleanup()
+
+Application.DisplayAlerts = False
+On Error Resume Next
+Worksheets("Input_Enhanced").Delete
+Worksheets("Output").Delete
+On Error GoTo 0
+Application.DisplayAlerts = True
+
+
+End Sub
+Public Function AddPivot(ws As Worksheet, Counter As Long, Column As Long, lastR As Long) As PivotTable
+    
+    Dim str As String
+    str = ws.name & "!R1C" & Column
+    Dim name As String
+    name = "PivotTable" & Counter
+    
+    
+    If ws Is Nothing Then
+        MsgBox "Error in AddPivot!"
+    Else
+        wbMacro.PivotCaches.Create(SourceType:=xlDatabase, SourceData:= _
+        wsInputEnh.name & "!A1:P" & lastR, Version:=6).CreatePivotTable TableDestination:= _
+        str, TableName:=name, DefaultVersion:=6
+    End If
+    
+    Set AddPivot = ws.PivotTables(name)
+    
+
+End Function
+
+
+Sub UpdatePivot1(PT As PivotTable, Counter As Long)
+
+Dim pf As PivotField, str As String
+Dim Pos As Long
+
+    ' Trap the PivotField object
+    On Error Resume Next
+    ' Add row field: Day
+    Set pf = Nothing
+    Set pf = PT.PivotFields("Day")
+    On Error GoTo 0
+    If pf Is Nothing Then
+        MsgBox "Pivot-Field object Error!"
+    Else
+        With pf
+            .Orientation = xlRowField
+            .Position = 1
+        End With
+    End If
+        
+    ' Next field: Pair
+    Set pf = Nothing
+    Set pf = PT.PivotFields("Pair")
+    On Error GoTo 0
+    If pf Is Nothing Then
+        MsgBox "Pivot-Field object Error!"
+    Else
+        With pf
+            .Orientation = xlRowField
+            .Position = 2
+        End With
+    End If
+    
+    '--------------------------------
+    ' Next field: Profit
+    AddValuesField PT, "Profit", "Sum of Profit"
+    AddValuesField PT, "Order Value", "Order Volume"
+
+End Sub
+
+
+Sub UpdatePivot2(PT As PivotTable, Counter As Long)
+
+Dim pf As PivotField, str As String
+Dim Pos As Long
+
+    ' Trap the PivotField object
+    On Error Resume Next
+    ' Add row field: Pair
+    Set pf = Nothing
+    Set pf = PT.PivotFields("Pair")
+    On Error GoTo 0
+    If pf Is Nothing Then
+        MsgBox "Pivot-Field object Error!"
+    Else
+        With pf
+            .Orientation = xlRowField
+            .Position = 1
+        End With
+    End If
+    
+    ' Add row field: Day
+    Set pf = Nothing
+    Set pf = PT.PivotFields("Day")
+    On Error GoTo 0
+    If pf Is Nothing Then
+        MsgBox "Pivot-Field object Error!"
+    Else
+        With pf
+            .Orientation = xlRowField
+            .Position = 2
+        End With
+    End If
+        
+
+    
+    '--------------------------------
+    ' Next field: Profit
+    AddValuesField PT, "Profit", "Sum of Profit"
+    AddValuesField PT, "Order Value", "Order Volume"
+
+End Sub
+
+
+
+Sub AddValuesField(pvt As PivotTable, pf As String, pf_Name As String)
+
+'Add field with given parameters
+pvt.AddDataField pvt.PivotFields(pf), pf_Name, xlSum
+
+End Sub
+
+
+Sub FormatInput()
+    
+    ' Create new worksheet
+    wsInput.Copy After:=Sheets(Sheets.Count)
+    ' Save new worksheet in variable and rename
+    Set wsInputEnh = Sheets(Sheets.Count)
+    wsInputEnh.name = "Input_Enhanced"
+
+    
+    Columns("A:A").Select
+    ' Change text to columns
+    Selection.TextToColumns Destination:=Range("A1"), DataType:=xlDelimited, _
+        TextQualifier:=xlDoubleQuote, ConsecutiveDelimiter:=False, Tab:=True, _
+        Semicolon:=False, Comma:=False, Space:=False, Other:=False, FieldInfo _
+        :=Array(Array(1, 1), Array(2, 1), Array(3, 1), Array(4, 1), Array(5, 1), Array(6, 1), _
+        Array(7, 1), Array(8, 1), Array(9, 2), Array(10, 1), Array(11, 2), Array(12, 1), Array(13, 2 _
+        ), Array(14, 1), Array(15, 1)), TrailingMinusNumbers:=True
+    ' Add column for simplified date (by day only)
+    Columns("B:B").Select
+    Selection.Insert Shift:=xlToRight, CopyOrigin:=xlFormatFromLeftOrAbove
+    Range("B1").Select
+    ActiveCell.FormulaR1C1 = "Day"
+    Range("B2").Select
+    ActiveCell.FormulaR1C1 = "=DATE(YEAR(RC[-1]),MONTH(RC[-1]),DAY(RC[-1]))"
+    Range("B2").Select
+    ' Get rowcount
+    rowcount = getLastFilledRow(wsInputEnh)
+    ' Copy formula to whole column
+    Selection.AutoFill Destination:=Range("B2:B" & rowcount)
+    ' Format date (short)
+    Columns("B:B").Select
+    Selection.NumberFormat = "m/d/yyyy"
+
+    ' Change number format in columns
+    Columns("J:J").Select
+    ' Selection.NumberFormat = "@"
+    Selection.NumberFormat = "###.##"
+    
+    ' This step is necessary for Excel to check that it's a decimal number
+    With Range("J:J")
+        .Replace What:=".", Replacement:=".", LookAt:=xlPart, _
+        SearchOrder:=xlByRows, MatchCase:=False, SearchFormat:=False, _
+        ReplaceFormat:=False
+        .Value = .Value
+    End With
+    
+    ' Same as above, just for another column
+    Columns("N:N").Select
+    Selection.Replace What:=".", Replacement:=".", LookAt:=xlPart, _
+        SearchOrder:=xlByRows, MatchCase:=False, SearchFormat:=False, _
+        ReplaceFormat:=False
+    'Adjust number format
+    Selection.NumberFormat = "@"
+    
+    ' Add column "profit", add data and format
+    Range("P1").Select
+    ActiveCell.FormulaR1C1 = "Profit"
+    Range("P2").Select
+    ActiveCell.FormulaR1C1 = "=IF(RC[-2],RC[-2]*RC[-6],0)"
+    Range("P2").Select
+    Selection.AutoFill Destination:=Range("P2:P" & rowcount)
+    Range("P2:P" & rowcount).Select
+    Selection.NumberFormat = _
+        "_-[$$-en-US]* #,##0.00_ ;_-[$$-en-US]* -#,##0.00 ;_-[$$-en-US]* ""-""??_ ;_-@_ "
+
+    ' Hide input sheet (enhanced input is still visible)
+    'wsInput.Visible = xlSheetHidden
+    
+
+End Sub
+
+
+Public Function getLastFilledRow(sh As Worksheet) As Long
+    On Error Resume Next
+    getLastFilledRow = sh.Cells.Find(What:="*", _
+                            After:=sh.Range("A1"), _
+                            LookAt:=xlPart, _
+                            LookIn:=xlValues, _
+                            SearchOrder:=xlByRows, _
+                            SearchDirection:=xlPrevious, _
+                            MatchCase:=False).Row
+    On Error GoTo 0
+End Function
+
+
+Sub Backup()
+
+
+'.....
+
+    
+
+'.....
+
+
+
+End Sub
+
+
